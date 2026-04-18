@@ -5,17 +5,16 @@ import "core:fmt"
 import "core:log"
 import "core:os"
 import ma "vendor:miniaudio"
+import rl "vendor:raylib"
 
 NUM_CHANNELS :: 2
 SAMPLE_RATE :: 44100
 
+WINDOW_HEIGHT :: 100
+WINDOW_WIDTH :: 400
+
 UserData :: struct {
 	ring_buffer: ^ma.pcm_rb,
-}
-
-log_callback :: proc "c" (user_data: rawptr, level: u32, message: cstring) {
-	context = runtime.default_context()
-	fmt.println(message)
 }
 
 capture_callback :: proc "c" (device: ^ma.device, output, input: rawptr, frame_count: u32) {
@@ -118,6 +117,9 @@ main :: proc() {
 	key: [1]byte
 	result: ma.result
 
+	rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Capture and Playback")
+	defer rl.CloseWindow()
+
 	/* ------------------------- capture ------------------------- */
 
 	capture_config := ma.device_config_init(.capture)
@@ -161,24 +163,6 @@ main :: proc() {
 
 	capture_device.pUserData = &user_data
 
-	ma.log_register_callback(
-		ma.device_get_log(&capture_device),
-		ma.log_callback_init(log_callback, nil),
-	)
-
-	result = ma.device_start(&capture_device)
-	if result != .SUCCESS {
-		fmt.eprintln("Failed to start capture_device:", result)
-		os.exit(1)
-	}
-	log.debug("Started capture_device")
-
-	fmt.print("Press Enter to stop capture...")
-	os.read(os.stdin, key[:])
-
-	ma.device_stop(&capture_device)
-	log.debug("Stopped capture_device")
-
 	/* ------------------------- playback ------------------------- */
 
 	playback_config := ma.device_config_init(.playback)
@@ -199,21 +183,94 @@ main :: proc() {
 
 	playback_device.pUserData = &user_data
 
-	ma.log_register_callback(
-		ma.device_get_log(&playback_device),
-		ma.log_callback_init(log_callback, nil),
-	)
+	/* ------------------------- main loop ------------------------- */
 
-	result = ma.device_start(&playback_device)
-	if result != .SUCCESS {
-		fmt.eprintln("Failed to start playback_device:", result)
-		os.exit(1)
+	x_pad: i32 = WINDOW_WIDTH / 10
+	y_pad: i32 = WINDOW_HEIGHT / 10
+
+	font_size: f32 = WINDOW_HEIGHT / 6
+
+	third_1 := (WINDOW_HEIGHT - (2 * y_pad)) / 3
+	third_2 := 2 * third_1
+	third_3: f32 = 3 * f32(third_1)
+
+	capturing_is_active := false
+	playback_is_active := false
+
+	for !rl.WindowShouldClose() {
+		// capture
+		if rl.IsKeyPressed(.SPACE) {
+			capturing_is_active = true
+			result = ma.device_start(&capture_device)
+			if result != .SUCCESS {
+				fmt.eprintln("Failed to start capture_device:", result)
+				os.exit(1)
+			}
+		}
+		if rl.IsKeyReleased(.SPACE) {
+			capturing_is_active = false
+			result = ma.device_stop(&capture_device)
+			if result != .SUCCESS {
+				fmt.eprintln("Failed to stop capture_device:", result)
+				os.exit(1)
+			}
+		}
+
+		// playback
+		if rl.IsKeyPressed(.P) {
+			playback_is_active = true
+			result = ma.device_start(&playback_device)
+			if result != .SUCCESS {
+				fmt.eprintln("Failed to start playback_device:", result)
+				os.exit(1)
+			}
+		}
+		if rl.IsKeyReleased(.P) {
+			playback_is_active = false
+			result = ma.device_stop(&playback_device)
+			if result != .SUCCESS {
+				fmt.eprintln("Failed to stop playback_device:", result)
+				os.exit(1)
+			}
+		}
+
+		// don't capture and play back at the same time
+		if (capturing_is_active & playback_is_active) {
+			capturing_is_active = false
+		}
+
+		rl.BeginDrawing()
+		{
+			rl.ClearBackground(rl.BLACK)
+
+			rl.DrawText(
+				"Press [SPACE] to capture",
+				x_pad,
+				third_1 - i32(font_size / 2),
+				i32(font_size),
+				rl.WHITE,
+			)
+			rl.DrawText(
+				"Press [P] to play back",
+				x_pad,
+				third_2 - i32(font_size / 2),
+				i32(font_size),
+				rl.WHITE,
+			)
+
+			if capturing_is_active {
+				radius: f32 = font_size / 2
+				rl.DrawCircle(x_pad + i32(radius), i32(third_3), radius, rl.RED)
+			}
+
+			if playback_is_active {
+				v1, v2, v3: rl.Vector2
+				v1[0], v1[1] = f32(x_pad), third_3 + font_size / 2
+				v2[0], v2[1] = f32(x_pad) + font_size, third_3
+				v3[0], v3[1] = f32(x_pad), third_3 - font_size / 2
+				rl.DrawTriangle(v1, v2, v3, rl.GREEN)
+			}
+		}
+		rl.EndDrawing()
 	}
-	log.debug("Started playback_device")
-
-	fmt.print("Press Enter to stop playback...")
-	os.read(os.stdin, key[:])
-
-	ma.device_stop(&playback_device)
-	log.debug("Stopped playback_device")
 }
