@@ -114,6 +114,9 @@ playback_callback :: proc "c" (device: ^ma.device, output, input: rawptr, frame_
 main :: proc() {
 	context.logger = log.create_console_logger(.Debug)
 
+	// context.logger = log.create_console_logger(.Fatal)
+	// rl.SetTraceLogLevel(.NONE)
+
 	key: [1]byte
 	result: ma.result
 
@@ -139,15 +142,9 @@ main :: proc() {
 	defer log.debug("Uninitialized capture_device")
 
 	capture_period_frames := capture_device.capture.internalPeriodSizeInFrames
+	buffer_size_in_frames := capture_period_frames * 40 * 3
 	ring_buffer: ma.pcm_rb
-	result = ma.pcm_rb_init(
-		.f32,
-		NUM_CHANNELS,
-		capture_period_frames * 40 * 10,
-		nil,
-		nil,
-		&ring_buffer,
-	)
+	result = ma.pcm_rb_init(.f32, NUM_CHANNELS, buffer_size_in_frames, nil, nil, &ring_buffer)
 	if result != .SUCCESS {
 		fmt.eprintln("Failed to initialize ring_buffer:", result)
 		os.exit(1)
@@ -194,13 +191,21 @@ main :: proc() {
 	third_2 := 2 * third_1
 	third_3: f32 = 3 * f32(third_1)
 
-	capturing_is_active := false
-	playback_is_active := false
+	capturing := false
+	new_capturing_done := false
+	capturing_prev := false
+	playing_back := false
+	start_playback := false
+
+	first_capturing_happened := false
 
 	for !rl.WindowShouldClose() {
-		// capture
+		capturing_prev = capturing
+		new_capturing_done = false
+
 		if rl.IsKeyPressed(.SPACE) {
-			capturing_is_active = true
+			first_capturing_happened = true
+			capturing = true
 			result = ma.device_start(&capture_device)
 			if result != .SUCCESS {
 				fmt.eprintln("Failed to start capture_device:", result)
@@ -208,7 +213,8 @@ main :: proc() {
 			}
 		}
 		if rl.IsKeyReleased(.SPACE) {
-			capturing_is_active = false
+			capturing = false
+			new_capturing_done = true
 			result = ma.device_stop(&capture_device)
 			if result != .SUCCESS {
 				fmt.eprintln("Failed to stop capture_device:", result)
@@ -216,59 +222,106 @@ main :: proc() {
 			}
 		}
 
-		// playback
-		if rl.IsKeyPressed(.P) {
-			playback_is_active = true
+		if new_capturing_done {
 			result = ma.device_start(&playback_device)
 			if result != .SUCCESS {
 				fmt.eprintln("Failed to start playback_device:", result)
 				os.exit(1)
 			}
+			playing_back = true
 		}
-		if rl.IsKeyReleased(.P) {
-			playback_is_active = false
-			result = ma.device_stop(&playback_device)
-			if result != .SUCCESS {
-				fmt.eprintln("Failed to stop playback_device:", result)
-				os.exit(1)
+
+		available_write: f32 = 0.0
+		if playing_back {
+			available_write =
+				f32(ma.pcm_rb_available_write(&ring_buffer)) / f32(buffer_size_in_frames)
+
+			if available_write >= 1.0 {
+				playing_back = false
+				result = ma.device_stop(&playback_device)
+				if result != .SUCCESS {
+					fmt.eprintln("Failed to stop playback_device:", result)
+					os.exit(1)
+				}
 			}
 		}
 
 		// don't capture and play back at the same time
-		if (capturing_is_active & playback_is_active) {
-			capturing_is_active = false
+		if (capturing & playing_back) {
+			capturing = false
 		}
 
+		available_read: f32 = 0.0
+		if (capturing) {
+			available_read =
+				f32(ma.pcm_rb_available_read(&ring_buffer)) / f32(buffer_size_in_frames)
+		}
+
+		startPos, endPos: rl.Vector2
+		line_start_x := f32(x_pad) + font_size + font_size
+		line_end_x := WINDOW_WIDTH - f32(x_pad)
 		rl.BeginDrawing()
 		{
 			rl.ClearBackground(rl.BLACK)
 
 			rl.DrawText(
-				"Press [SPACE] to capture",
+				"Press [ESC] to exit",
 				x_pad,
 				third_1 - i32(font_size / 2),
 				i32(font_size),
 				rl.WHITE,
 			)
 			rl.DrawText(
-				"Press [P] to play back",
+				"Hold [SPACE] to record",
 				x_pad,
 				third_2 - i32(font_size / 2),
 				i32(font_size),
 				rl.WHITE,
 			)
 
-			if capturing_is_active {
+			// TODO: stop recording if available_read == 1
+			// TODO: replay with green progress marker until red recording marker
+
+			// progress bar line
+			startPos[0], startPos[1] = line_start_x, third_3
+			endPos[0], endPos[1] = line_end_x, third_3
+			rl.DrawLineV(startPos, endPos, rl.BLUE)
+
+			if capturing {
 				radius: f32 = font_size / 2
 				rl.DrawCircle(x_pad + i32(radius), i32(third_3), radius, rl.RED)
+
+				startPos[0], startPos[1] =
+					line_start_x +
+					available_read * (line_end_x - line_start_x),
+					third_3 +
+					font_size / 2
+				endPos[0], endPos[1] =
+					line_start_x +
+					available_read * (line_end_x - line_start_x),
+					third_3 -
+					font_size / 2
+				rl.DrawLineV(startPos, endPos, rl.RED)
 			}
 
-			if playback_is_active {
+			if playing_back {
 				v1, v2, v3: rl.Vector2
 				v1[0], v1[1] = f32(x_pad), third_3 + font_size / 2
 				v2[0], v2[1] = f32(x_pad) + font_size, third_3
 				v3[0], v3[1] = f32(x_pad), third_3 - font_size / 2
 				rl.DrawTriangle(v1, v2, v3, rl.GREEN)
+
+				startPos[0], startPos[1] =
+					line_start_x +
+					available_write * available_read * (line_end_x - line_start_x),
+					third_3 +
+					font_size / 2
+				endPos[0], endPos[1] =
+					line_start_x +
+					available_write * available_read * (line_end_x - line_start_x),
+					third_3 -
+					font_size / 2
+				rl.DrawLineV(startPos, endPos, rl.GREEN)
 			}
 		}
 		rl.EndDrawing()
