@@ -17,6 +17,23 @@ UserData :: struct {
 	ring_buffer: ^ma.pcm_rb,
 }
 
+device_start :: proc(device: ^ma.device, name: string) {
+	result := ma.device_start(device)
+	if result != .SUCCESS {
+		fmt.eprintfln("Failed to start %v device: %v", name, result)
+		os.exit(1)
+	}
+}
+
+
+device_stop :: proc(device: ^ma.device, name: string) {
+	result := ma.device_stop(device)
+	if result != .SUCCESS {
+		fmt.eprintfln("Failed to stop %v device: %v", name, result)
+		os.exit(1)
+	}
+}
+
 capture_callback :: proc "c" (device: ^ma.device, output, input: rawptr, frame_count: u32) {
 	// context = runtime.default_context()
 
@@ -112,18 +129,28 @@ playback_callback :: proc "c" (device: ^ma.device, output, input: rawptr, frame_
 }
 
 main :: proc() {
-	context.logger = log.create_console_logger(.Debug)
+	when ODIN_DEBUG {
+		context.logger = log.create_console_logger(.Debug)
+	} else {
+		context.logger = log.create_console_logger(.Fatal)
+		rl.SetTraceLogLevel(.NONE)
+	}
 
-	// context.logger = log.create_console_logger(.Fatal)
-	// rl.SetTraceLogLevel(.NONE)
-
-	key: [1]byte
 	result: ma.result
+
+	x_pad: i32 = WINDOW_WIDTH / 10
+	y_pad: i32 = WINDOW_HEIGHT / 10
+
+	font_size: f32 = WINDOW_HEIGHT / 6
+
+	third_1 := (WINDOW_HEIGHT - (2 * y_pad)) / 3
+	third_2 := 2 * third_1
+	third_3: f32 = 3 * f32(third_1)
 
 	rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Capture and Playback")
 	defer rl.CloseWindow()
 
-	/* ------------------------- capture ------------------------- */
+	/* ------------------------- capture init ------------------------- */
 
 	capture_config := ma.device_config_init(.capture)
 	capture_config.dataCallback = capture_callback
@@ -160,7 +187,7 @@ main :: proc() {
 
 	capture_device.pUserData = &user_data
 
-	/* ------------------------- playback ------------------------- */
+	/* ------------------------- playback init ------------------------- */
 
 	playback_config := ma.device_config_init(.playback)
 	playback_config.dataCallback = playback_callback
@@ -182,81 +209,62 @@ main :: proc() {
 
 	/* ------------------------- main loop ------------------------- */
 
-	x_pad: i32 = WINDOW_WIDTH / 10
-	y_pad: i32 = WINDOW_HEIGHT / 10
-
-	font_size: f32 = WINDOW_HEIGHT / 6
-
-	third_1 := (WINDOW_HEIGHT - (2 * y_pad)) / 3
-	third_2 := 2 * third_1
-	third_3: f32 = 3 * f32(third_1)
-
 	capturing := false
+	first_capturing_happened := false
 	new_capturing_done := false
-	capturing_prev := false
 	playing_back := false
 	start_playback := false
 
-	first_capturing_happened := false
+	rd_vail: f32 = 0.0
+	wr_avail: f32 = 0.0
 
 	for !rl.WindowShouldClose() {
-		capturing_prev = capturing
 		new_capturing_done = false
 
-		if rl.IsKeyPressed(.SPACE) {
-			first_capturing_happened = true
-			capturing = true
-			result = ma.device_start(&capture_device)
-			if result != .SUCCESS {
-				fmt.eprintln("Failed to start capture_device:", result)
-				os.exit(1)
+		/* ----- start/stop recording ----- */
+		if !playing_back {
+			if rl.IsKeyPressed(.SPACE) {
+				rd_vail = 0
+				first_capturing_happened = true
+				capturing = true
+				device_start(&capture_device, "capture")
 			}
-		}
-		if rl.IsKeyReleased(.SPACE) {
-			capturing = false
-			new_capturing_done = true
-			result = ma.device_stop(&capture_device)
-			if result != .SUCCESS {
-				fmt.eprintln("Failed to stop capture_device:", result)
-				os.exit(1)
+			if rl.IsKeyReleased(.SPACE) {
+				capturing = false
+				new_capturing_done = true
+				device_stop(&capture_device, "capture")
 			}
 		}
 
+		if capturing {
+			rd_vail = f32(ma.pcm_rb_available_read(&ring_buffer)) / f32(buffer_size_in_frames)
+		}
+
+		if rd_vail >= 1 {
+			rd_vail = 1
+			capturing = false
+			new_capturing_done = true
+			device_stop(&capture_device, "capture")
+		}
+
+		/* ----- start/stop playback ----- */
 		if new_capturing_done {
-			result = ma.device_start(&playback_device)
-			if result != .SUCCESS {
-				fmt.eprintln("Failed to start playback_device:", result)
-				os.exit(1)
-			}
+			device_start(&playback_device, "playback")
 			playing_back = true
 		}
 
-		available_write: f32 = 0.0
 		if playing_back {
-			available_write =
-				f32(ma.pcm_rb_available_write(&ring_buffer)) / f32(buffer_size_in_frames)
+			wr_avail = f32(ma.pcm_rb_available_write(&ring_buffer)) / f32(buffer_size_in_frames)
 
-			if available_write >= 1.0 {
+			if wr_avail >= 1 {
+				rd_vail = 0
+				wr_avail = 1
 				playing_back = false
-				result = ma.device_stop(&playback_device)
-				if result != .SUCCESS {
-					fmt.eprintln("Failed to stop playback_device:", result)
-					os.exit(1)
-				}
+				device_stop(&playback_device, "playback")
 			}
 		}
 
-		// don't capture and play back at the same time
-		if (capturing & playing_back) {
-			capturing = false
-		}
-
-		available_read: f32 = 0.0
-		if (capturing) {
-			available_read =
-				f32(ma.pcm_rb_available_read(&ring_buffer)) / f32(buffer_size_in_frames)
-		}
-
+		/* ----- draw ----- */
 		startPos, endPos: rl.Vector2
 		line_start_x := f32(x_pad) + font_size + font_size
 		line_end_x := WINDOW_WIDTH - f32(x_pad)
@@ -264,6 +272,7 @@ main :: proc() {
 		{
 			rl.ClearBackground(rl.BLACK)
 
+			/* ----- text ----- */
 			rl.DrawText(
 				"Press [ESC] to exit",
 				x_pad,
@@ -279,46 +288,42 @@ main :: proc() {
 				rl.WHITE,
 			)
 
-			// TODO: stop recording if available_read == 1
-			// TODO: replay with green progress marker until red recording marker
-
-			// progress bar line
+			/* ----- progress bar line ----- */
 			startPos[0], startPos[1] = line_start_x, third_3
 			endPos[0], endPos[1] = line_end_x, third_3
 			rl.DrawLineV(startPos, endPos, rl.BLUE)
 
+			/* ----- recording dot ----- */
 			if capturing {
 				radius: f32 = font_size / 2
 				rl.DrawCircle(x_pad + i32(radius), i32(third_3), radius, rl.RED)
-
-				startPos[0], startPos[1] =
-					line_start_x +
-					available_read * (line_end_x - line_start_x),
-					third_3 +
-					font_size / 2
-				endPos[0], endPos[1] =
-					line_start_x +
-					available_read * (line_end_x - line_start_x),
-					third_3 -
-					font_size / 2
-				rl.DrawLineV(startPos, endPos, rl.RED)
 			}
 
+			/* ----- progress bar recording ----- */
+			startPos[0], startPos[1] =
+				line_start_x + rd_vail * (line_end_x - line_start_x), third_3 + font_size / 2
+			endPos[0], endPos[1] =
+				line_start_x + rd_vail * (line_end_x - line_start_x), third_3 - font_size / 2
+			rl.DrawLineV(startPos, endPos, rl.RED)
+
 			if playing_back {
+				/* ----- playback triangle ----- */
 				v1, v2, v3: rl.Vector2
 				v1[0], v1[1] = f32(x_pad), third_3 + font_size / 2
 				v2[0], v2[1] = f32(x_pad) + font_size, third_3
 				v3[0], v3[1] = f32(x_pad), third_3 - font_size / 2
 				rl.DrawTriangle(v1, v2, v3, rl.GREEN)
 
+				/* ----- progress bar playback ----- */
+				av := (wr_avail - (1 - rd_vail)) / rd_vail
 				startPos[0], startPos[1] =
 					line_start_x +
-					available_write * available_read * (line_end_x - line_start_x),
+					av * rd_vail * (line_end_x - line_start_x),
 					third_3 +
 					font_size / 2
 				endPos[0], endPos[1] =
 					line_start_x +
-					available_write * available_read * (line_end_x - line_start_x),
+					av * rd_vail * (line_end_x - line_start_x),
 					third_3 -
 					font_size / 2
 				rl.DrawLineV(startPos, endPos, rl.GREEN)
