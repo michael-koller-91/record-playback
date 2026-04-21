@@ -10,7 +10,7 @@ import rl "vendor:raylib"
 NUM_CHANNELS :: 2
 SAMPLE_RATE :: 44100
 
-WINDOW_HEIGHT :: 100
+WINDOW_HEIGHT :: 150
 WINDOW_WIDTH :: 400
 
 UserData :: struct {
@@ -169,7 +169,7 @@ main :: proc() {
 	defer log.debug("Uninitialized capture_device")
 
 	capture_period_frames := capture_device.capture.internalPeriodSizeInFrames
-	buffer_size_in_frames := capture_period_frames * 40 * 3
+	buffer_size_in_frames := capture_period_frames * 40 * 30 // probably about 30 seconds
 	ring_buffer: ma.pcm_rb
 	result = ma.pcm_rb_init(.f32, NUM_CHANNELS, buffer_size_in_frames, nil, nil, &ring_buffer)
 	if result != .SUCCESS {
