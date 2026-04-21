@@ -3,7 +3,9 @@
 Record microphone input and play it back instantly for pronunciation practice in any language.
 For learners who want immediate auditory feedback to compare and refine their speech.
 
-![Screenshot](screenshot.png)
+<div align="center">
+  <img src="screenshot.png">
+</div>
 
 ## Install
 
