@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -xe
+
 mkdir downloads
 
 # download and unpack Odin
