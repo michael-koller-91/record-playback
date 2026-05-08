@@ -16,11 +16,11 @@ Run
 ./setup.sh
 ```
 
-### Build
+### Quick Start
 
-Run
 ```console
-odin build .
+make release
+./record-playback
 ```
 
 ### (Optional) Symlink
