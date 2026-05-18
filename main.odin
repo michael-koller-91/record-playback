@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:fmt"
 import "core:log"
 import "core:os"
+import "core:time"
 import ma "vendor:miniaudio"
 import rl "vendor:raylib"
 
@@ -24,7 +25,6 @@ device_start :: proc(device: ^ma.device, name: string) {
 		os.exit(1)
 	}
 }
-
 
 device_stop :: proc(device: ^ma.device, name: string) {
 	result := ma.device_stop(device)
@@ -187,6 +187,12 @@ main :: proc() {
 
 	capture_device.pUserData = &user_data
 
+	// When the device is started for the first time, it outputs ones followed by minus ones.
+	// By briefly starting the device here, capturing works from the very beginning for the user.
+	device_start(&capture_device, "capture")
+	time.sleep(2_000_000)
+	device_stop(&capture_device, "capture")
+
 	/* ------------------------- playback init ------------------------- */
 
 	playback_config := ma.device_config_init(.playback)
@@ -215,7 +221,7 @@ main :: proc() {
 	playing_back := false
 	start_playback := false
 
-	rd_vail: f32 = 0.0
+	rd_avail: f32 = 0.0
 	wr_avail: f32 = 0.0
 
 	for !rl.WindowShouldClose() {
@@ -224,7 +230,7 @@ main :: proc() {
 		/* ----- start/stop recording ----- */
 		if !playing_back {
 			if rl.IsKeyPressed(.SPACE) {
-				rd_vail = 0
+				rd_avail = 0
 				first_capturing_happened = true
 				capturing = true
 				device_start(&capture_device, "capture")
@@ -237,11 +243,11 @@ main :: proc() {
 		}
 
 		if capturing {
-			rd_vail = f32(ma.pcm_rb_available_read(&ring_buffer)) / f32(buffer_size_in_frames)
+			rd_avail = f32(ma.pcm_rb_available_read(&ring_buffer)) / f32(buffer_size_in_frames)
 		}
 
-		if rd_vail >= 1 {
-			rd_vail = 1
+		if rd_avail >= 1 {
+			rd_avail = 1
 			capturing = false
 			new_capturing_done = true
 			device_stop(&capture_device, "capture")
@@ -257,7 +263,7 @@ main :: proc() {
 			wr_avail = f32(ma.pcm_rb_available_write(&ring_buffer)) / f32(buffer_size_in_frames)
 
 			if wr_avail >= 1 {
-				rd_vail = 0
+				rd_avail = 0
 				wr_avail = 1
 				playing_back = false
 				device_stop(&playback_device, "playback")
@@ -301,9 +307,9 @@ main :: proc() {
 
 			/* ----- progress bar recording ----- */
 			startPos[0], startPos[1] =
-				line_start_x + rd_vail * (line_end_x - line_start_x), third_3 + font_size / 2
+				line_start_x + rd_avail * (line_end_x - line_start_x), third_3 + font_size / 2
 			endPos[0], endPos[1] =
-				line_start_x + rd_vail * (line_end_x - line_start_x), third_3 - font_size / 2
+				line_start_x + rd_avail * (line_end_x - line_start_x), third_3 - font_size / 2
 			rl.DrawLineV(startPos, endPos, rl.RED)
 
 			if playing_back {
@@ -315,15 +321,15 @@ main :: proc() {
 				rl.DrawTriangle(v1, v2, v3, rl.GREEN)
 
 				/* ----- progress bar playback ----- */
-				av := (wr_avail - (1 - rd_vail)) / rd_vail
+				av := (wr_avail - (1 - rd_avail)) / rd_avail
 				startPos[0], startPos[1] =
 					line_start_x +
-					av * rd_vail * (line_end_x - line_start_x),
+					av * rd_avail * (line_end_x - line_start_x),
 					third_3 +
 					font_size / 2
 				endPos[0], endPos[1] =
 					line_start_x +
-					av * rd_vail * (line_end_x - line_start_x),
+					av * rd_avail * (line_end_x - line_start_x),
 					third_3 -
 					font_size / 2
 				rl.DrawLineV(startPos, endPos, rl.GREEN)
