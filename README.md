@@ -7,16 +7,11 @@ For learners who want immediate auditory feedback to compare and refine their sp
   <img src="screenshot.png">
 </div>
 
-## Install
+## Quick Start
 
-### Get Odin
+### [Get Odin](https://odin-lang.org/docs/install/)
 
-Run
-```console
-./setup.sh
-```
-
-### Quick Start
+### Compile and Run the Application
 
 ```console
 make release
